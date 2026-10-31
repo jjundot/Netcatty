@@ -29,7 +29,7 @@ const { useWorkspaceDetachPointerDrag } = await import("./TerminalLayerSupport")
 
 type Listener = EventListenerOrEventListenerObject;
 
-function createDragDom() {
+function createDragDom(panes: Array<{ dataset: { sessionId: string }; getBoundingClientRect: () => DOMRect }> = []) {
   const documentListeners = new Map<string, Set<Listener>>();
   const windowListeners = new Map<string, Set<Listener>>();
   const appendedElements = new Set<{ remove: () => void }>();
@@ -66,6 +66,7 @@ function createDragDom() {
       return element;
     },
     querySelector: () => null,
+    querySelectorAll: () => panes,
     addEventListener: (type: string, listener: Listener) => addListener(documentListeners, type, listener),
     removeEventListener: (type: string, listener: Listener) => removeListener(documentListeners, type, listener),
     defaultView: fakeWindow,
@@ -80,6 +81,45 @@ function createDragDom() {
     appendedElements,
   };
 }
+
+test("pointer drag moves an existing pane onto another pane", async () => {
+  const rect = { left: 0, right: 100, top: 0, bottom: 100, width: 100, height: 100 } as DOMRect;
+  const dom = createDragDom([{ dataset: { sessionId: 'target' }, getBoundingClientRect: () => rect }]);
+  const moved: unknown[][] = [];
+  let pointerDown: ((event: React.PointerEvent<HTMLElement>) => void) | null = null;
+  const workspace = {
+    id: 'vault',
+    root: { id: 'split', type: 'split', direction: 'vertical', children: [
+      { id: 'source-pane', type: 'pane', sessionId: 'source' },
+      { id: 'target-pane', type: 'pane', sessionId: 'target' },
+    ] },
+  };
+  function Harness() {
+    pointerDown = useWorkspaceDetachPointerDrag({
+      inActiveWorkspace: true,
+      session: { id: 'source', workspaceId: 'vault' } as never,
+      workspaceById: new Map([['vault', workspace as never]]),
+      onAddSessionToWorkspace: (...args) => moved.push(args),
+    });
+    return null;
+  }
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(React.createElement(Harness)); });
+  await act(async () => {
+    pointerDown!({
+      button: 0, clientX: 0, clientY: 0,
+      currentTarget: { ownerDocument: dom.document },
+      preventDefault: () => undefined, stopPropagation: () => undefined,
+    } as unknown as React.PointerEvent<HTMLElement>);
+    dom.dispatchDocument('pointermove', { clientX: 80, clientY: 50 } as PointerEvent);
+    dom.dispatchDocument('pointerup', { clientX: 80, clientY: 50 } as PointerEvent);
+  });
+  assert.deepEqual(moved, [['vault', 'source', {
+    direction: 'vertical', position: 'right', targetSessionId: 'target',
+  }]]);
+  assert.equal(dom.appendedElements.size, 0);
+  await act(async () => { renderer!.unmount(); });
+});
 
 test("pointer drag cleanup runs when the pane unmounts without pointerup", async () => {
   const dom = createDragDom();

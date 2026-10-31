@@ -160,6 +160,8 @@ interface TopTabsProps {
   onStartSessionDrag: (sessionId: string) => void;
   onEndSessionDrag: () => void;
   onReorderTabs: (draggedId: string, targetId: string, position: 'before' | 'after') => void;
+  onCreateWorkspaceFromSessions: (baseSessionId: string, joiningSessionId: string, hint: import('../domain/workspace').SplitHint) => void;
+  onAddSessionToWorkspace: (workspaceId: string, sessionId: string, hint: import('../domain/workspace').SplitHint) => void;
   onRemoveSessionFromWorkspace: (
     sessionId: string,
     tabInsertionTarget?: { tabId: string; position: 'before' | 'after'; additionalTabIds?: readonly string[] },
@@ -215,6 +217,8 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
   onStartSessionDrag,
   onEndSessionDrag,
   onReorderTabs,
+  onCreateWorkspaceFromSessions,
+  onAddSessionToWorkspace,
   onRemoveSessionFromWorkspace,
   onAppendHostToWorkspace,
   showSftpTab,
@@ -280,6 +284,7 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
   const [dropIndicator, setDropIndicator] = useState<{ tabId: string; position: 'before' | 'after' } | null>(null);
   const [isDraggingForReorder, setIsDraggingForReorder] = useState(false);
   const [hostDropWorkspaceId, setHostDropWorkspaceId] = useState<string | null>(null);
+  const [mergeTargetTabId, setMergeTargetTabId] = useState<string | null>(null);
   const draggedTabIdRef = useRef<string | null>(null);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
 
@@ -548,6 +553,7 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
     setDropIndicator(null);
     setIsDraggingForReorder(false);
     setHostDropWorkspaceId(null);
+    setMergeTargetTabId(null);
     onEndSessionDrag();
   }, [onEndSessionDrag]);
 
@@ -570,6 +576,23 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
     e.dataTransfer.dropEffect = 'move';
     setHostDropWorkspaceId(null);
 
+    const sourceId = hasWorkspaceSessionDrag(e.dataTransfer)
+      ? draggingSessionId
+      : draggedTabIdRef.current;
+    const sourceSession = sourceId ? sessions.find((session) => session.id === sourceId) : undefined;
+    const targetWorkspace = workspaceMap.get(tabId);
+    const targetSession = orphanSessionMap.get(tabId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const inMergeZone = e.clientX >= rect.left + rect.width * 0.25
+      && e.clientX <= rect.right - rect.width * 0.25;
+    if (sourceSession && sourceId !== tabId && inMergeZone
+      && (targetWorkspace || (targetSession && !sourceSession.workspaceId))) {
+      setDropIndicator(null);
+      setMergeTargetTabId(tabId);
+      return;
+    }
+    setMergeTargetTabId(null);
+
     if (hasWorkspaceSessionDrag(e.dataTransfer)) {
       setDropIndicator(null);
       return;
@@ -580,18 +603,18 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
     }
 
     // Determine if we're on the left or right half of the target tab
-    const rect = e.currentTarget.getBoundingClientRect();
     const midpoint = rect.left + rect.width / 2;
     const position: 'before' | 'after' = e.clientX < midpoint ? 'before' : 'after';
 
     // Always update drop indicator on drag over to ensure it doesn't get stuck
     setDropIndicator({ tabId, position });
-  }, [onAppendHostToWorkspace, workspaceMap]);
+  }, [draggingSessionId, onAppendHostToWorkspace, orphanSessionMap, sessions, workspaceMap]);
 
   const handleTabDragLeave = useCallback((e: React.DragEvent) => {
     const next = e.relatedTarget;
     if (next instanceof Node && e.currentTarget.contains(next)) return;
     setHostDropWorkspaceId(null);
+    setMergeTargetTabId(null);
     // Don't clear drop indicator on drag leave - let onDragOver manage it
     // This prevents the indicator from flickering/disappearing during fast drags
     // The indicator will be cleared when drag ends or on drop
@@ -620,6 +643,29 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
 
     e.preventDefault();
     setHostDropWorkspaceId(null);
+    const sourceId = hasWorkspaceSessionDrag(e.dataTransfer)
+      ? getWorkspaceSessionDragId(e.dataTransfer)
+      : e.dataTransfer.getData('tab-reorder-id') || draggedTabIdRef.current;
+    if (mergeTargetTabId === targetTabId && sourceId && sourceId !== targetTabId) {
+      const targetWorkspace = workspaceMap.get(targetTabId);
+      const targetWorkspaceIds = targetWorkspace ? collectSessionIds(targetWorkspace.root) : [];
+      const targetSessionId = targetWorkspace
+        ? targetWorkspaceIds.includes(targetWorkspace.focusedSessionId)
+          ? targetWorkspace.focusedSessionId
+          : targetWorkspaceIds[0]
+        : orphanSessionMap.has(targetTabId) ? targetTabId : null;
+      if (targetSessionId) {
+        const hint = { direction: 'vertical' as const, position: 'right' as const, targetSessionId };
+        if (targetWorkspace) onAddSessionToWorkspace(targetTabId, sourceId, hint);
+        else onCreateWorkspaceFromSessions(targetTabId, sourceId, hint);
+        setMergeTargetTabId(null);
+        setDropIndicator(null);
+        setIsDraggingForReorder(false);
+        onEndSessionDrag();
+        return;
+      }
+    }
+    setMergeTargetTabId(null);
     if (hasWorkspaceSessionDrag(e.dataTransfer)) {
       const draggedSessionId = getWorkspaceSessionDragId(e.dataTransfer);
       const draggedSession = sessions.find((s) => s.id === draggedSessionId);
@@ -648,7 +694,7 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
 
     setDropIndicator(null);
     setIsDraggingForReorder(false);
-  }, [dropIndicator, onAppendHostToWorkspace, onEndSessionDrag, onRemoveSessionFromWorkspace, onReorderTabs, sessions, workspaceMap, workspaces]);
+  }, [dropIndicator, mergeTargetTabId, onAddSessionToWorkspace, onAppendHostToWorkspace, onCreateWorkspaceFromSessions, onEndSessionDrag, onRemoveSessionFromWorkspace, onReorderTabs, orphanSessionMap, sessions, workspaceMap, workspaces]);
 
   const handleTabBarDrop = useCallback((e: React.DragEvent) => {
     if (!hasWorkspaceSessionDrag(e.dataTransfer)) return;
@@ -887,7 +933,9 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
       if (item.type === 'session') {
         const session = item.session;
         const isBeingDragged = draggingSessionId === session.id;
-        const shiftStyle = tabShiftStyles[session.id] || emptyTabStyle;
+        const shiftStyle = mergeTargetTabId === session.id
+          ? { boxShadow: 'inset 0 0 0 2px rgba(52, 211, 153, 0.8)' }
+          : tabShiftStyles[session.id] || emptyTabStyle;
         const showDropIndicatorBefore = dropIndicator?.tabId === session.id && dropIndicator.position === 'before';
         const showDropIndicatorAfter = dropIndicator?.tabId === session.id && dropIndicator.position === 'after';
 
@@ -926,7 +974,9 @@ const TopTabsInner: React.FC<TopTabsProps> = ({
         const workspace = item.workspace;
         const paneCount = item.paneCount;
         const isBeingDragged = draggingSessionId === workspace.id;
-        const shiftStyle = tabShiftStyles[workspace.id] || emptyTabStyle;
+        const shiftStyle = mergeTargetTabId === workspace.id
+          ? { boxShadow: 'inset 0 0 0 2px rgba(52, 211, 153, 0.8)' }
+          : tabShiftStyles[workspace.id] || emptyTabStyle;
         const showDropIndicatorBefore = dropIndicator?.tabId === workspace.id && dropIndicator.position === 'before';
         const showDropIndicatorAfter = dropIndicator?.tabId === workspace.id && dropIndicator.position === 'after';
         const workspaceSessionIds = collectSessionIds(workspace.root);
@@ -1307,6 +1357,8 @@ export const topTabsAreEqual = (prev: TopTabsProps, next: TopTabsProps): boolean
     prev.onCopySessionToNewWindow === next.onCopySessionToNewWindow &&
     prev.onEditHost === next.onEditHost &&
     prev.onAppendHostToWorkspace === next.onAppendHostToWorkspace &&
+    prev.onAddSessionToWorkspace === next.onAddSessionToWorkspace &&
+    prev.onCreateWorkspaceFromSessions === next.onCreateWorkspaceFromSessions &&
     prev.onCopyWorkspace === next.onCopyWorkspace &&
     prev.onOpenSettings === next.onOpenSettings &&
     prev.onLockApp === next.onLockApp &&

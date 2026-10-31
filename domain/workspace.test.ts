@@ -6,6 +6,7 @@ import {
   appendPaneToWorkspaceRoot,
   cloneWorkspaceTree,
   insertPaneIntoWorkspace,
+  movePaneInWorkspace,
   reorderWorkspaceFocusSessionOrder,
   resolveWorkspaceFocusSessionOrder,
 } from "./workspace.ts";
@@ -60,6 +61,21 @@ test("insertPaneIntoWorkspace ignores an existing session pane", () => {
     root,
   );
 });
+
+test("movePaneInWorkspace moves an existing session without duplicating it", () => {
+  const moved = movePaneInWorkspace(root, "s1", {
+    direction: "horizontal", position: "bottom", targetSessionId: "s3",
+  });
+  assert.deepEqual(collectSessionIdsForTest(moved), ["s2", "s3", "s1"]);
+  assert.deepEqual(collectSessionIdsForTest(root), ["s1", "s2", "s3"]);
+  assert.equal(movePaneInWorkspace(root, "s1", {
+    direction: "vertical", position: "left", targetSessionId: "s1",
+  }), root);
+});
+
+function collectSessionIdsForTest(node: WorkspaceNode): string[] {
+  return node.type === "pane" ? [node.sessionId] : node.children.flatMap(collectSessionIdsForTest);
+}
 
 const nestedRoot: WorkspaceNode = {
   id: "split-root",

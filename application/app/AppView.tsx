@@ -572,6 +572,8 @@ function AppViewInner({ domains }: AppViewProps) {
         onStartSessionDrag={setDraggingSessionId}
         onEndSessionDrag={handleEndSessionDrag}
         onReorderTabs={reorderWorkTabs}
+        onCreateWorkspaceFromSessions={createWorkspaceFromSessions}
+        onAddSessionToWorkspace={addSessionToWorkspace}
         onRemoveSessionFromWorkspace={removeSessionFromWorkspace}
         onAppendHostToWorkspace={handleAppendHostToWorkspace}
         showSftpTab={showSftpTab}

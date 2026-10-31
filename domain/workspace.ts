@@ -146,6 +146,31 @@ export const insertPaneIntoWorkspace = (
   return insertPane(root);
 };
 
+/** Move an existing pane beside another pane without changing its session. */
+export const movePaneInWorkspace = (
+  root: WorkspaceNode,
+  sessionId: string,
+  hint: SplitHint,
+): WorkspaceNode => {
+  if (!hint.targetSessionId || sessionId === hint.targetSessionId) return root;
+  const ids = collectSessionIds(root);
+  if (!ids.includes(sessionId) || !ids.includes(hint.targetSessionId)) return root;
+
+  const pane = _findPaneBySessionId(root, sessionId);
+  const remaining = pruneWorkspaceNode(root, sessionId);
+  if (!pane || !remaining) return root;
+
+  const insert = (node: WorkspaceNode): WorkspaceNode => {
+    if (node.type === 'pane' && node.sessionId === hint.targetSessionId) {
+      return createSplitFromPane(node, pane, hint);
+    }
+    return node.type === 'split'
+      ? { ...node, children: node.children.map(insert) }
+      : node;
+  };
+  return insert(remaining);
+};
+
 export const createWorkspaceFromSessions = (
   baseSessionId: string,
   joiningSessionId: string,

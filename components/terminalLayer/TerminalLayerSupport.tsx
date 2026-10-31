@@ -877,6 +877,7 @@ interface TerminalPaneProps {
     sessionId: string,
     tabInsertionTarget?: { tabId: string; position: 'before' | 'after'; additionalTabIds?: readonly string[] },
   ) => void;
+  onAddSessionToWorkspace?: (workspaceId: string, sessionId: string, hint: Exclude<SplitHint, null>) => void;
   onReorderTabs?: (draggedId: string, targetId: string, position: 'before' | 'after', additionalTabIds?: readonly string[]) => void;
   onStartSessionDrag?: (sessionId: string) => void;
   onEndSessionDrag?: () => void;
@@ -991,6 +992,7 @@ const terminalPanePropsAreEqual = (
   prev.showSelectionAIAction === next.showSelectionAIAction &&
   prev.onStartSessionRename === next.onStartSessionRename &&
   prev.onRemoveSessionFromWorkspace === next.onRemoveSessionFromWorkspace &&
+  prev.onAddSessionToWorkspace === next.onAddSessionToWorkspace &&
   prev.onReorderTabs === next.onReorderTabs &&
   prev.onStartSessionDrag === next.onStartSessionDrag &&
   prev.onEndSessionDrag === next.onEndSessionDrag
@@ -1004,6 +1006,7 @@ type WorkspaceDetachPointerDragOptions = {
   onStartSessionDrag?: (sessionId: string) => void;
   onEndSessionDrag?: () => void;
   onRemoveSessionFromWorkspace?: TerminalPaneProps['onRemoveSessionFromWorkspace'];
+  onAddSessionToWorkspace?: TerminalPaneProps['onAddSessionToWorkspace'];
   onReorderTabs?: TerminalPaneProps['onReorderTabs'];
 };
 
@@ -1015,6 +1018,7 @@ export function useWorkspaceDetachPointerDrag({
   onStartSessionDrag,
   onEndSessionDrag,
   onRemoveSessionFromWorkspace,
+  onAddSessionToWorkspace,
   onReorderTabs,
 }: WorkspaceDetachPointerDragOptions): (event: React.PointerEvent<HTMLElement>) => void {
   const activeDragCleanupRef = useRef<(() => void) | null>(null);
@@ -1043,6 +1047,35 @@ export function useWorkspaceDetachPointerDrag({
     let cleanupFinished = false;
     let ghostEl: HTMLDivElement | null = null;
     let insertEl: HTMLDivElement | null = null;
+    let panePreviewEl: HTMLDivElement | null = null;
+
+    const getPaneDropTarget = (point: { clientX: number; clientY: number }) => {
+      const activeWorkspaceId = activeTabStore.getActiveTabId();
+      const workspace = activeWorkspaceId ? workspaceById.get(activeWorkspaceId) : undefined;
+      if (!workspace || workspace.viewMode === 'focus' || !ownerDocument.querySelectorAll) return null;
+      const memberIds = new Set(collectSessionIds(workspace.root));
+      for (const pane of ownerDocument.querySelectorAll<HTMLElement>('[data-section="terminal-split-pane"][data-session-id]')) {
+        const targetSessionId = pane.dataset.sessionId;
+        if (!targetSessionId || targetSessionId === session.id || !memberIds.has(targetSessionId)) continue;
+        const rect = pane.getBoundingClientRect();
+        if (!rect.width || !rect.height || !isPointInsideRect(point, rect)) continue;
+        const relX = (point.clientX - rect.left) / rect.width;
+        const relY = (point.clientY - rect.top) / rect.height;
+        const vertical = Math.abs(relX - 0.5) > Math.abs(relY - 0.5);
+        const position: 'left' | 'right' | 'top' | 'bottom' = vertical
+          ? (relX < 0.5 ? 'left' : 'right')
+          : (relY < 0.5 ? 'top' : 'bottom');
+        const preview = vertical
+          ? { left: position === 'left' ? rect.left : rect.left + rect.width / 2, top: rect.top, width: rect.width / 2, height: rect.height }
+          : { left: rect.left, top: position === 'top' ? rect.top : rect.top + rect.height / 2, width: rect.width, height: rect.height / 2 };
+        return {
+          workspaceId: workspace.id,
+          hint: { direction: vertical ? 'vertical' as const : 'horizontal' as const, position, targetSessionId },
+          preview,
+        };
+      }
+      return null;
+    };
 
     const ensureDragElements = () => {
       if (!ghostEl) {
@@ -1085,14 +1118,36 @@ export function useWorkspaceDetachPointerDrag({
     const removeDragElements = () => {
       ghostEl?.remove();
       insertEl?.remove();
+      panePreviewEl?.remove();
       ghostEl = null;
       insertEl = null;
+      panePreviewEl = null;
     };
 
     const updateDragElements = (pointerEvent: PointerEvent) => {
       ensureDragElements();
       if (ghostEl) {
         ghostEl.style.transform = `translate(${pointerEvent.clientX + 12}px, ${pointerEvent.clientY + 10}px)`;
+      }
+
+      const paneTarget = getPaneDropTarget(pointerEvent);
+      if (paneTarget) {
+        if (!panePreviewEl) {
+          panePreviewEl = ownerDocument.createElement('div');
+          panePreviewEl.style.position = 'fixed';
+          panePreviewEl.style.zIndex = '2147483645';
+          panePreviewEl.style.pointerEvents = 'none';
+          panePreviewEl.style.background = 'rgba(5, 150, 105, 0.25)';
+          panePreviewEl.style.border = '1px solid rgba(52, 211, 153, 0.8)';
+          ownerDocument.body.appendChild(panePreviewEl);
+        }
+        panePreviewEl.style.display = 'block';
+        panePreviewEl.style.left = `${paneTarget.preview.left}px`;
+        panePreviewEl.style.top = `${paneTarget.preview.top}px`;
+        panePreviewEl.style.width = `${paneTarget.preview.width}px`;
+        panePreviewEl.style.height = `${paneTarget.preview.height}px`;
+      } else if (panePreviewEl) {
+        panePreviewEl.style.display = 'none';
       }
 
       const topTabsRoot = ownerDocument.querySelector<HTMLElement>('[data-top-tabs-root]');
@@ -1178,6 +1233,7 @@ export function useWorkspaceDetachPointerDrag({
       const shouldDetach = dragStarted
         && !!topTabsRoot
         && isPointInsideRect(pointerEvent, topTabsRoot.getBoundingClientRect());
+      const paneTarget = dragStarted && !shouldDetach ? getPaneDropTarget(pointerEvent) : null;
       cleanup();
       if (shouldDetach) {
         const stableInsertionTarget = resolveStableInsertionTarget(insertionTarget);
@@ -1198,6 +1254,8 @@ export function useWorkspaceDetachPointerDrag({
             stableInsertionTarget.tabId,
           ]);
         }
+      } else if (paneTarget) {
+        onAddSessionToWorkspace?.(paneTarget.workspaceId, session.id, paneTarget.hint);
       }
     };
 
@@ -1211,6 +1269,7 @@ export function useWorkspaceDetachPointerDrag({
     inActiveWorkspace,
     onEndSessionDrag,
     onRemoveSessionFromWorkspace,
+    onAddSessionToWorkspace,
     onReorderTabs,
     onStartSessionDrag,
     session,
@@ -1296,6 +1355,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = memo(({
   showSelectionAIAction,
   onStartSessionRename,
   onRemoveSessionFromWorkspace,
+  onAddSessionToWorkspace,
   onReorderTabs,
   onStartSessionDrag,
   onEndSessionDrag,
@@ -1578,6 +1638,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = memo(({
     onStartSessionDrag,
     onEndSessionDrag,
     onRemoveSessionFromWorkspace,
+    onAddSessionToWorkspace,
     onReorderTabs,
   });
   const handleTerminalFontSizeChange = useCallback((nextFontSize: number) => {
@@ -1789,6 +1850,7 @@ interface TerminalPanesHostProps {
   onAddSelectionToAI?: (sessionId: string, selection: string) => void;
   onStartSessionRename?: (sessionId: string) => void;
   onRemoveSessionFromWorkspace?: TerminalPaneProps['onRemoveSessionFromWorkspace'];
+  onAddSessionToWorkspace?: TerminalPaneProps['onAddSessionToWorkspace'];
   onReorderTabs?: (draggedId: string, targetId: string, position: 'before' | 'after', additionalTabIds?: readonly string[]) => void;
   onStartSessionDrag?: (sessionId: string) => void;
   onEndSessionDrag?: () => void;
@@ -1872,6 +1934,7 @@ const terminalPanesHostPropsAreEqual = (
   if (prev.onAddSelectionToAI !== next.onAddSelectionToAI) return false;
   if (prev.onStartSessionRename !== next.onStartSessionRename) return false;
   if (prev.onRemoveSessionFromWorkspace !== next.onRemoveSessionFromWorkspace) return false;
+  if (prev.onAddSessionToWorkspace !== next.onAddSessionToWorkspace) return false;
   if (prev.onReorderTabs !== next.onReorderTabs) return false;
   if (prev.onStartSessionDrag !== next.onStartSessionDrag) return false;
   if (prev.onEndSessionDrag !== next.onEndSessionDrag) return false;

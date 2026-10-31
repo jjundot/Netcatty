@@ -27,6 +27,7 @@ updateWorkspaceSplitSizes,
   invertSplitPosition,
 } from '../../domain/workspace';
 import { clearSessionFontSizeOverride as clearSessionFontSizeOverrideFields } from '../../domain/terminalAppearance';
+import { moveSessionPaneState } from './moveSessionPane';
 import {
   composeSendTargetAfterToolbarToggle,
   flipComposeSendTarget,
@@ -802,22 +803,23 @@ export const useSessionState = ({
     hint: SplitHint
   ) => {
     if (!hint) return;
-    
-	    setSessions(prevSessions => {
-      const session = prevSessions.find(s => s.id === sessionId);
-      if (!session || session.workspaceId) return prevSessions;
-      
-      setWorkspaces(prevWorkspaces => {
-        const targetWorkspace = prevWorkspaces.find(w => w.id === workspaceId);
-        if (!targetWorkspace) return prevWorkspaces;
-        
-        return insertWorkspacePaneIfMissing(prevWorkspaces, workspaceId, sessionId, hint);
-      });
-      
-      setActiveTabId(workspaceId);
-      return prevSessions.map(s => s.id === sessionId ? { ...s, workspaceId } : s);
-	    });
-	  }, [setActiveTabId]);
+    const result = moveSessionPaneState({
+      sessions: sessionsRef.current,
+      workspaces: workspacesRef.current,
+      sessionId,
+      targetWorkspaceId: workspaceId,
+      hint,
+    });
+    if (!result.changed) return;
+    setSessions(result.sessions);
+    setWorkspaces(result.workspaces);
+    setTabOrder((previous) => replaceDissolvedWorkspaceTabOrder(
+      previous,
+      result.dissolvedWorkspaceId,
+      result.replacementTabIds,
+    ).filter((id) => id !== sessionId));
+    setActiveTabId(workspaceId);
+  }, [setActiveTabId]);
 
   // Merge two tabs into one workspace. When one of them already belongs to a
   // workspace, that workspace (and its id) is reused instead of dissolving

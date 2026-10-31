@@ -334,7 +334,7 @@ export function useTerminalWorkspaceLayout({
   
       if (activeWorkspace) {
         const draggedSession = sessions.find(s => s.id === draggedSessionId);
-        if (!draggedSession || draggedSession.workspaceId) return;
+        if (!draggedSession) return;
         onAddSessionToWorkspace(activeWorkspace.id, draggedSessionId, hint);
         return;
       }

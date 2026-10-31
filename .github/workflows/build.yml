@@ -320,7 +320,9 @@ jobs:
           echo "Setting version to ${VERSION}"
           npm pkg set version="${VERSION}"
 
-      - name: Build package
+      - name: Build package (macOS)
+        if: matrix.name == 'macos'
+        shell: bash
         env:
           ELECTRON_BUILDER_PUBLISH: "never"
           # macOS code signing & notarization (only for macOS builds)
@@ -329,6 +331,19 @@ jobs:
           APPLE_ID: ${{ matrix.name == 'macos' && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.name == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ matrix.name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          # Forks without Apple signing secrets must leave CSC_* unset;
+          # electron-builder treats an empty CSC_LINK as a file path.
+          if [[ -z "$CSC_LINK" ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npm run ${{ matrix.pack_script }}
+
+      - name: Build package
+        if: matrix.name != 'macos'
+        env:
+          ELECTRON_BUILDER_PUBLISH: "never"
         run: npm run ${{ matrix.pack_script }}
 
       - name: Test packaged SSH cipher negotiation
